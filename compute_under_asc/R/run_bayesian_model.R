@@ -5,12 +5,11 @@
 # time points, the approximation is exact
 # cfr_trend is an optional vector of CFR estimates with an element for each time
 # point in the timeseries
-
-## Que es n_inducing?
-bayesian_model <- function (data,
+run_bayesian_model <- function (data,
                                 n_inducing = 5,
                                 cfr_baseline = cfr_baseline,
                                 cfr_range = cfr_range,
+                                cfr_trend = NULL,
                                 verbose = TRUE) {
   
   # only fit to time points where there are known cases
@@ -18,30 +17,28 @@ bayesian_model <- function (data,
     dplyr::filter(cases_known > 0)
   
   n <- nrow(data)
-  times <- seq(min(data$date_num), max(data$date_num)) # integer sequence
+  times <- seq(min(data$date_num), max(data$date_num))
   
   # GP parameters for squared-exponential kernel plus a bias term (intercept)
   # for reporting rate
-  lengthscale <- greta::lognormal(4, 0.5) # lenghtscale for rbf 
-  sigma <- greta::lognormal(-1, 1) # sigma for rbf
+  lengthscale <- greta::lognormal(4, 0.5)
+  sigma <- greta::lognormal(-1, 1)
   temporal <- greta.gp::rbf(lengthscales = lengthscale,
                             variance = sigma ^ 2)
-  intercept <- greta.gp::bias(1) # zero-mean normnal distribution for bias
-  reporting_kernel <- temporal + intercept # Non-parametric function for each region
+  intercept <- greta.gp::bias(1)
+  reporting_kernel <- temporal + intercept
   
   # IID noise kernel for observation overdispersion (clumped death reports)
   sigma_obs <- greta::normal(0, 0.5, truncation = c(0, Inf))
-  observation_kernel <- greta.gp::white(sigma_obs ^ 2)  
+  observation_kernel <- greta.gp::white(sigma_obs ^ 2)
   
-  # combined kernel 
-  kernel <- reporting_kernel + observation_kernel 
+  # combined kernel (marginalises a bunch of parameters for easier sampling)
+  kernel <- reporting_kernel + observation_kernel
   
   # a set of inducing points at which to estimate the GPs; using a subset of
   # regressors approximation (put an inducing point at the last time, since we
   # care a lot about that estimate)
-  
   inducing_points <- seq(min(times), max(times), length.out = n_inducing + 1)[-1]
-  # Prgeuntar bien a LF esto. Que tanto incide? En greta dice que esto es opcional 
   
   # GP for the (probit-) reporting rate
   z <- greta.gp::gp(times, inducing = inducing_points, kernel)
@@ -53,6 +50,13 @@ bayesian_model <- function (data,
   # CIs are symmetric around the estimate, so we assume it's an approximately
   # Gaussian distribution, truncated to allowable values.
 
+  # If a cfr_trend is provided, that is taken as the mean for each time, but
+  # with a constant error (only the intercept is uncertain)
+  true_cfr_mean <- cfr_trend
+  
+  if (is.null(cfr_trend)) {
+    true_cfr_mean <- cfr_baseline
+  }
   
   # add temporally constant uncertainty in CFR
   true_cfr_sigma <- mean(abs(cfr_range - cfr_baseline)) / 1.96
@@ -67,10 +71,10 @@ bayesian_model <- function (data,
   expected_deaths <- exp(log_expected_deaths)
   
   # define sampling distribution
-  greta::distribution(data$deaths) <- greta::poisson(expected_deaths) # Likelihood
+  greta::distribution(data$deaths) <- greta::poisson(expected_deaths)
   
   # construct the model
-  m <- greta::model(reporting_rate) # It takes a greta array as argument (GP) 
+  m <- greta::model(reporting_rate)
   
   n_chains <- 200
   
@@ -82,7 +86,7 @@ bayesian_model <- function (data,
       sigma = abs(rnorm(1, 0, 0.5)),
       sigma_obs = abs(rnorm(1, 0, 0.5)),
       baseline_cfr_perc = max(0.001, min(99.999,
-                                         rnorm(1, true_cfr_mean, true_cfr_sigma)
+        rnorm(1, true_cfr_mean, true_cfr_sigma)
       ))
     ),
     simplify = FALSE
@@ -96,7 +100,7 @@ bayesian_model <- function (data,
   # draw a bunch of mcmc samples
   draws <- greta::mcmc(
     m,
-    sampler = greta::hmc(Lmin = 15, Lmax = 20), # Cuanto influyen estos parametros?
+    sampler = greta::hmc(Lmin = 15, Lmax = 20),
     chains = n_chains,
     warmup = 1000,
     n_samples = 1000,
@@ -137,10 +141,3 @@ bayesian_model <- function (data,
   )
   
 }
-
-bayesian_model (maule_test,
-                n_inducing = 5,
-                cfr_baseline = cfr_baseline,
-                cfr_range = cfr_range,
-                verbose = TRUE)
-
