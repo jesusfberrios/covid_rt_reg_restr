@@ -31,4 +31,3 @@ cases_known_convolution <- function(region_chile, data = timeseries_cases_death,
   
 }
 
-#maule_test <= cases_known_convolution("Maule",timeseries_cases_death, 1.4)
